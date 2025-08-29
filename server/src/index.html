@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cursor Chat</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 0; display: grid; place-items: center; height: 100vh; }
+    .chat { width: min(780px, 100vw); height: min(80vh, 800px); display: grid; grid-template-rows: 1fr auto; border: 1px solid #ccc; border-radius: 10px; overflow: hidden; background: #fff; }
+    .messages { padding: 16px; overflow: auto; background: #fafafa; }
+    .msg { margin-bottom: 12px; line-height: 1.5; }
+    .msg.user { text-align: right; }
+    .msg.assistant { text-align: left; }
+    .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #e5e5e5; background: #fff; }
+    .composer input { flex: 1; padding: 10px 12px; font-size: 16px; border-radius: 8px; border: 1px solid #ddd; }
+    .composer button { padding: 10px 14px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #111; color: #fff; cursor: pointer; }
+    .assistant .token { white-space: pre-wrap; }
+    .muted { color: #777; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="chat">
+    <div id="messages" class="messages"></div>
+    <form id="form" class="composer">
+      <input id="input" autocomplete="off" placeholder="Tulis pertanyaan..." />
+      <button>Kirim</button>
+    </form>
+  </div>
+
+  <script>
+    const messagesEl = document.getElementById('messages');
+    const formEl = document.getElementById('form');
+    const inputEl = document.getElementById('input');
+    const conversation = [];
+
+    function append(role, text) {
+      const el = document.createElement('div');
+      el.className = `msg ${role}`;
+      el.innerHTML = text || '<span class="muted">...</span>';
+      messagesEl.appendChild(el);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return el;
+    }
+
+    formEl.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const content = inputEl.value.trim();
+      if (!content) return;
+      inputEl.value = '';
+
+      conversation.push({ role: 'user', content });
+      append('user', content);
+      const assistantEl = append('assistant', '');
+
+      const resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: conversation })
+      });
+
+      if (!resp.ok) {
+        assistantEl.textContent = 'Terjadi kesalahan.';
+        return;
+      }
+
+      // Handle OpenAI-style SSE stream: lines begin with `data:`
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantText = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split(/\n/);
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const json = JSON.parse(data);
+            const delta = json.choices?.[0]?.delta?.content ?? '';
+            if (delta) {
+              assistantText += delta;
+              assistantEl.textContent = assistantText;
+              messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+          } catch {}
+        }
+      }
+      conversation.push({ role: 'assistant', content: assistantText });
+    });
+  </script>
+</body>
+</html>
+
